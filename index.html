@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Interactive proof of concept for a nested islanding grid: whole-system simulation, the Islet switch, and its close-permit logic.">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Islet Grid Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: switchgear control-room console. Wide one-line diagram on the left, operator panel on the right; product teardown below. */
+:root{
+  --bg:#EDF1F0; --panel:#FFFFFF; --ink:#15211F; --muted:#56655F; --rule:#C7D1CD; --soft:#E2E8E6;
+  --hot:#C98A00; --fault:#C4362B; --accent:#1D5FA8; --ok:#23764F;
+  --i1:#0E8C83; --i2:#7351C2; --i3:#2B7BD6; --i4:#B5427F; --i5:#4F8A1F; --i6:#A35E1C;
+  --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1513; --panel:#16201E; --ink:#E2ECE9; --muted:#93A49F; --rule:#2B3A36; --soft:#1D2926;
+  --hot:#F0B531; --fault:#F0685C; --accent:#6FA9F2; --ok:#4FC28A;
+  --i1:#2EC4B6; --i2:#A38AF0; --i3:#5EA4F5; --i4:#E479B0; --i5:#8CC94E; --i6:#E09A55; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E1513; --panel:#16201E; --ink:#E2ECE9; --muted:#93A49F; --rule:#2B3A36; --soft:#1D2926;
+  --hot:#F0B531; --fault:#F0685C; --accent:#6FA9F2; --ok:#4FC28A;
+  --i1:#2EC4B6; --i2:#A38AF0; --i3:#5EA4F5; --i4:#E479B0; --i5:#8CC94E; --i6:#E09A55; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55}
+.wrap{max-width:1280px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px;display:grid;gap:28px}
+h1,h2,h3{font-family:var(--display);font-weight:600;letter-spacing:.01em;text-wrap:balance;margin:0;line-height:1.1}
+h1{font-size:clamp(34px,5vw,52px)}
+h2{font-size:28px}
+h3{font-size:19px}
+p{margin:0;max-width:68ch}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lede{color:var(--muted);font-size:16px}
+header{display:grid;gap:14px}
+.tiers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.tier{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;display:grid;gap:3px;min-width:0}
+.tier b{font-family:var(--display);font-size:17px;font-weight:600}
+.tier span{font-size:13px;color:var(--muted)}
+.tier i{font-style:normal;font-family:var(--mono);font-size:11px;color:var(--accent)}
+.console{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:14px;min-width:0}
+.diagram{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.diagram svg{display:block;width:100%;min-width:820px;height:auto}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.clock{font-family:var(--mono);font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+button{font:inherit;font-size:13px;color:var(--ink);background:var(--soft);border:1px solid var(--rule);border-radius:5px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);border-color:var(--accent);color:var(--panel)}
+select{font:inherit;font-size:13px;color:var(--ink);background:var(--soft);border:1px solid var(--rule);border-radius:5px;padding:5px 8px;max-width:100%}
+select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.plan{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.ctrls{display:flex;gap:6px;flex-wrap:wrap}
+.side{display:grid;gap:12px}
+.scen{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.scen button{text-align:left;line-height:1.25;padding:7px 9px}
+.scen button small{display:block;color:var(--muted);font-size:11.5px}
+.scen button.on small{color:inherit;opacity:.85}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.metric{display:grid;gap:1px;padding:8px;border-radius:5px;background:var(--soft);min-width:0}
+.metric b{font-family:var(--display);font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1}
+.metric span{font-size:11.5px;color:var(--muted)}
+.log{font-family:var(--mono);font-size:11.5px;line-height:1.45;display:grid;gap:4px;max-height:300px;overflow-y:auto}
+.log div{display:grid;grid-template-columns:52px 64px 1fr;gap:6px;min-width:0}
+.log time{color:var(--muted);font-variant-numeric:tabular-nums}
+.log em{font-style:normal;text-transform:uppercase;font-size:10px;letter-spacing:.05em;padding-top:1px}
+.t-local{color:var(--i1)} .t-xfmr{color:var(--i5)} .t-regional{color:var(--accent)} .t-central{color:var(--i2)} .t-crew{color:var(--hot)} .t-cyber,.t-fault{color:var(--fault)}
+.insp{font-size:13px;display:grid;gap:8px}
+.insp dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-family:var(--mono);font-size:12px}
+.insp dt{color:var(--muted)} .insp dd{margin:0;font-variant-numeric:tabular-nums}
+.note{font-size:12.5px;color:var(--muted)}
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid currentColor}
+.ok{color:var(--ok)} .bad{color:var(--fault)} .warn{color:var(--hot)}
+section{display:grid;gap:14px}
+.two{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;align-items:start}
+.permit{display:grid;gap:10px}
+.permit label{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;font-size:13px}
+.permit input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--accent)}
+.permit output{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.verdict{border-radius:6px;padding:10px 12px;font-family:var(--display);font-size:20px;font-weight:600}
+.verdict.go{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.verdict.no{background:color-mix(in srgb,var(--fault) 13%,transparent);color:var(--fault)}
+.verdict small{display:block;font-family:var(--body);font-size:12.5px;font-weight:400}
+.checks{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:12.5px}
+.checks li{display:grid;grid-template-columns:18px 1fr;gap:6px}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+td.y{color:var(--ok);font-weight:600} td.n{color:var(--muted)} td.p{color:var(--hot)}
+tr.us td{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.svgt{font-family:var(--body);fill:var(--ink)}
+.svgm{font-family:var(--mono);fill:var(--muted)}
+.svgd{font-family:var(--display);font-weight:600;fill:var(--ink)}
+.hit{cursor:pointer}
+.hit:hover{opacity:.75}
+.limits{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.limits div{display:grid;gap:4px;min-width:0}
+@media (max-width:1020px){.console,.two{grid-template-columns:1fr}.tiers{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.tiers,.limits{grid-template-columns:1fr}.scen{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <span class="eyebrow">Nested islanding grid · logic proof of concept · scaled model, 90 homes</span>
+  <h1>Islet Grid Simulator</h1>
+  <p class="lede">One switch design, the Islet node, sits at every home, every transformer, and every feeder section. Cheap chips in each node measure the power and decide locally in milliseconds. Regional computers merge neighborhoods into islands in seconds, and one central computer handles the base, the loop to the second substation, and the return to normal. Pick a scenario and watch the rules hold.</p>
+  <div class="tiers">
+    <div class="tier"><i>Tier 1 · every node · ~10 ms</i><b>Node chip</b><span>Measures volts, amps, frequency. Trips on faults and grid loss with no outside help.</span></div>
+    <div class="tier"><i>Tier 2 · every transformer · ~1 s</i><b>Transformer coordinator</b><span>Builds the 15-home island over its own wires (powerline signal), even if radios fail.</span></div>
+    <div class="tier"><i>Tier 3 · per region · ~5 s</i><b>Regional computer</b><span>Merges transformer islands along the feeder and shares energy between them.</span></div>
+    <div class="tier"><i>Tier 4 · one per utility · ~10 s</i><b>Central computer</b><span>Runs the base link, the loop to substation B, and reconnecting to the grid.</span></div>
+  </div>
+</header>
+
+<section id="system" aria-labelledby="sys-h">
+  <div class="console">
+    <div class="side">
+    <div class="card">
+      <div class="bar">
+        <h2 id="sys-h">The whole system</h2>
+        <div class="ctrls">
+          <button id="b-play" class="on" type="button">Pause</button>
+          <button id="b-step" type="button">Step 1 s</button>
+          <button id="b-speed" type="button">Speed 4×</button>
+          <button id="b-hour" type="button" title="Drain batteries as if an hour passed">Skip 1 hour</button>
+          <span class="clock" id="clock">t = 0 s</span>
+        </div>
+      </div>
+      <div class="diagram"><svg id="grid" viewBox="0 0 1000 470" role="img" aria-label="One-line diagram of the feeder, transformers, homes, base and control computers"></svg></div>
+      <p class="note" id="status-line">Click any switch or home to inspect its node chip. Homes: thick bar = battery, dot = solar only, plain = neither.</p>
+    </div>
+    <div class="card"><h3 style="margin-bottom:8px">Event log</h3><div class="log" id="log" aria-live="polite"></div></div>
+    </div>
+    <div class="side">
+      <div class="card">
+        <h3>Scenarios</h3>
+        <div class="scen" id="scen"></div>
+        <label class="note" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="antiflap" checked> Anti-flap rules on (hold time and firm-solar check)</label>
+        <label class="note plan" for="nightplan">Night plan
+          <select id="nightplan">
+            <option value="clock" selected>Clock schedule: 1.0, then 0.5, then 0.7 kW</option>
+            <option value="sleep">Sleep caps all night: 0.5 kW from 9 PM</option>
+            <option value="off">Off: full AC</option>
+          </select>
+        </label>
+      </div>
+      <div class="card"><div class="metrics" id="metrics"></div></div>
+      <div class="card insp" id="insp"><h3>Node inspector</h3><p class="note">Select a switch or a home on the diagram.</p></div>
+    </div>
+  </div>
+</section>
+<section id="product" aria-labelledby="prod-h">
+  <div>
+    <span class="eyebrow">The product</span>
+    <h2 id="prod-h">Inside an Islet home node</h2>
+  </div>
+  <p class="lede">The home version fits between the utility meter and its socket, like the meter collars utilities already approve. The transformer, section and base versions use the same control board on bigger switches, so every node in the grid speaks the same rules.</p>
+  <div class="two">
+    <div class="card diagram">
+      <svg viewBox="0 0 760 445" role="img" aria-label="Cutaway of the Islet home node: power path through sensors, contactor and viewing window, with manual handle, control board, clock chip and load-control outputs" style="min-width:600px">
+        <rect x="120" y="28" width="520" height="395" rx="18" style="fill:var(--soft);stroke:var(--rule)"/>
+        <text x="140" y="416" class="svgm" font-size="11">METER-COLLAR HOUSING · 200 A · 120/240 V</text>
+        <rect x="100" y="118" width="34" height="24" rx="3" style="fill:var(--panel);stroke:var(--muted)"/>
+        <text x="60" y="166" class="svgt" font-size="12">Grid side</text>
+        <line x1="134" y1="130" x2="250" y2="130" style="stroke:var(--hot);stroke-width:5"/>
+        <circle cx="200" cy="130" r="14" style="fill:none;stroke:var(--accent);stroke-width:3"/>
+        <text x="200" y="104" text-anchor="middle" class="svgm" font-size="11">CT</text>
+        <circle cx="160" cy="130" r="4" style="fill:var(--accent)"/>
+        <line x1="160" y1="134" x2="160" y2="200" style="stroke:var(--accent);stroke-width:1.2;stroke-dasharray:3 3"/>
+        <rect x="250" y="105" width="138" height="50" rx="5" style="fill:var(--panel);stroke:var(--ink)"/>
+        <text x="319" y="126" text-anchor="middle" class="svgd" font-size="13.5">Latching contactor</text>
+        <text x="319" y="143" text-anchor="middle" class="svgm" font-size="10">200 A main switch</text>
+        <line x1="388" y1="130" x2="395" y2="130" style="stroke:var(--hot);stroke-width:5"/>
+        <rect x="395" y="108" width="62" height="44" rx="4" style="fill:var(--panel);stroke:var(--muted);stroke-dasharray:4 3"/>
+        <line x1="403" y1="130" x2="421" y2="122" style="stroke:var(--ink);stroke-width:3"/>
+        <line x1="431" y1="130" x2="449" y2="130" style="stroke:var(--ink);stroke-width:3"/>
+        <text x="426" y="168" text-anchor="middle" class="svgm" font-size="10.5">viewing window</text>
+        <line x1="457" y1="130" x2="626" y2="130" style="stroke:var(--hot);stroke-width:5"/>
+        <circle cx="520" cy="130" r="14" style="fill:none;stroke:var(--accent);stroke-width:3"/>
+        <text x="520" y="104" text-anchor="middle" class="svgm" font-size="11">CT</text>
+        <circle cx="575" cy="130" r="4" style="fill:var(--accent)"/>
+        <line x1="575" y1="134" x2="575" y2="200" style="stroke:var(--accent);stroke-width:1.2;stroke-dasharray:3 3"/>
+        <rect x="626" y="118" width="34" height="24" rx="3" style="fill:var(--panel);stroke:var(--muted)"/>
+        <text x="672" y="166" class="svgt" font-size="12">Home side</text>
+        <line x1="321" y1="105" x2="321" y2="70" style="stroke:var(--ink);stroke-width:3"/>
+        <rect x="292" y="58" width="58" height="12" rx="4" style="fill:var(--hot)"/>
+        <circle cx="368" cy="64" r="7" style="fill:none;stroke:var(--ink);stroke-width:2.5"/>
+        <text x="384" y="62" class="svgt" font-size="12.5">Manual handle + padlock hasp</text>
+        <text x="384" y="78" class="svgm" font-size="10.5">Off is purely mechanical. A padlock blocks closing.</text>
+        <rect x="150" y="200" width="460" height="205" rx="8" style="fill:var(--panel);stroke:var(--rule)"/>
+        <text x="160" y="217" class="svgm" font-size="10.5">CONTROL BOARD</text>
+        <path d="M360 230 V195 H300 V157" style="fill:none;stroke:var(--accent);stroke-width:1.6"/>
+        <text x="294" y="176" text-anchor="end" class="svgm" font-size="10" style="fill:var(--accent)">close via permit</text>
+        <path d="M515 230 V185 H355 V157" style="fill:none;stroke:var(--fault);stroke-width:1.6"/>
+        <text x="442" y="178" class="svgm" font-size="10" style="fill:var(--fault)">trip only</text>
+        <g font-size="10.5">
+          <rect x="165" y="230" width="120" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="225" y="249" text-anchor="middle" class="svgd" font-size="14">Metering IC</text>
+          <text x="225" y="265" text-anchor="middle" class="svgm">V, I, f, phase</text>
+          <rect x="300" y="230" width="120" height="44" rx="4" style="fill:var(--soft);stroke:var(--accent)"/>
+          <text x="360" y="249" text-anchor="middle" class="svgd" font-size="14">Main MCU</text>
+          <text x="360" y="265" text-anchor="middle" class="svgm">rules + permit</text>
+          <rect x="435" y="230" width="160" height="44" rx="4" style="fill:var(--soft);stroke:var(--fault)"/>
+          <text x="515" y="249" text-anchor="middle" class="svgd" font-size="14">Safety MCU</text>
+          <text x="515" y="265" text-anchor="middle" class="svgm">separate chip · trip only</text>
+          <rect x="165" y="290" width="120" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="225" y="309" text-anchor="middle" class="svgd" font-size="14">Secure element</text>
+          <text x="225" y="325" text-anchor="middle" class="svgm">signs + verifies</text>
+          <rect x="300" y="290" width="120" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="360" y="309" text-anchor="middle" class="svgd" font-size="14">Mesh radio</text>
+          <text x="360" y="325" text-anchor="middle" class="svgm">900 MHz</text>
+          <rect x="435" y="290" width="75" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="472" y="309" text-anchor="middle" class="svgd" font-size="14">PLC</text>
+          <text x="472" y="325" text-anchor="middle" class="svgm">powerline</text>
+          <rect x="520" y="290" width="75" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="557" y="309" text-anchor="middle" class="svgd" font-size="14">Supercap</text>
+          <text x="557" y="325" text-anchor="middle" class="svgm">hold-up</text>
+          <rect x="165" y="345" width="120" height="44" rx="4" style="fill:var(--soft);stroke:var(--accent)"/>
+          <text x="225" y="364" text-anchor="middle" class="svgd" font-size="14">Clock chip</text>
+          <text x="225" y="380" text-anchor="middle" class="svgm">night schedule</text>
+          <rect x="300" y="345" width="295" height="44" rx="4" style="fill:var(--soft);stroke:var(--muted)"/>
+          <text x="447" y="364" text-anchor="middle" class="svgd" font-size="14">Load-control outputs</text>
+          <text x="447" y="380" text-anchor="middle" class="svgm">to panel relays: AC, water heater, EV</text>
+        </g>
+        <text x="166" y="192" class="svgm" font-size="10">V-sense</text>
+        <text x="581" y="192" class="svgm" font-size="10">V-sense</text>
+      </svg>
+    </div>
+    <div class="card permit">
+      <h3>Close permit: try to close the switch</h3>
+      <p class="note">Every node runs this check before it closes, whether the request comes from the central computer or from someone pulling the handle. Opening never needs permission.</p>
+      <label>Crew padlock on handle <input type="checkbox" id="p-lock"></label>
+      <label>Test pulse finds a fault on the far side <input type="checkbox" id="p-fault"></label>
+      <label>Command signature valid <input type="checkbox" id="p-sig" checked></label>
+      <label>Seconds since this switch last moved <output id="o-hold">40</output><input type="range" id="p-hold" min="0" max="60" step="1" value="40"></label>
+      <label>Voltage difference across switch <output id="o-dv">3.0 %</output><input type="range" id="p-dv" min="0" max="20" step="0.5" value="3"></label>
+      <label>Frequency difference <output id="o-df">0.08 Hz</output><input type="range" id="p-df" min="0" max="1" step="0.02" value="0.08"></label>
+      <label>Phase angle difference <output id="o-dp">9°</output><input type="range" id="p-dp" min="0" max="60" step="1" value="9"></label>
+      <label>Island capacity after the merge, as % of its load <output id="o-cap">130 %</output><input type="range" id="p-cap" min="50" max="200" step="5" value="130"></label>
+      <div class="verdict" id="verdict"></div>
+      <ul class="checks" id="checks"></ul>
+    </div>
+  </div>
+  <div class="card tablewrap">
+    <h3 style="margin-bottom:6px">Night schedule stored on every node</h3>
+    <p class="note" style="margin-bottom:8px">The clock chip keeps time on the supercapacitor through outages, and the schedule lives on the node, so it works even with every link down. Caps apply only when a home is on island power. On the grid, nothing is capped. When storage is short, the regional computer can switch every node to a stricter plan: sleep caps all night, 0.5 kW per home from 9 PM to sunrise.</p>
+    <table>
+      <thead><tr><th>When</th><th>Cap per home</th><th>What it covers</th></tr></thead>
+      <tbody>
+        <tr><td>9 to 11 PM</td><td class="num" style="text-align:left">1.0 kW</td><td>AC on a higher setpoint, plus essentials</td></tr>
+        <tr><td>11 PM to 5:30 AM</td><td class="num" style="text-align:left">0.5 kW</td><td>One cool bedroom, fridge, fan, router</td></tr>
+        <tr><td>5:30 to 6:30 AM</td><td class="num" style="text-align:left">0.7 kW</td><td>Waking up</td></tr>
+        <tr><td>After sunrise</td><td class="num" style="text-align:left">0.7 kW rising with solar</td><td>Back to full use as the sun gets strong</td></tr>
+        <tr><td>Island storage under half</td><td class="num" style="text-align:left">Cap cut 40%, never below 0.2 kW</td><td>Signaled by island frequency under 59.75 Hz</td></tr>
+        <tr><td>Island storage under 25%</td><td class="num" style="text-align:left">0.2 kW</td><td>Essentials circuit only: fridge, fan, a light, medical. Stays here until storage is back above 35%</td></tr>
+        <tr><td>Any time</td><td class="num" style="text-align:left">No cap</td><td>Registered medical devices</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section aria-labelledby="fix-h">
+  <h2 id="fix-h">Every open problem, and the rule that handles it</h2>
+  <div class="card tablewrap">
+    <table>
+      <thead><tr><th>Problem</th><th>How Islet handles it</th><th>Scenario that tests it</th></tr></thead>
+      <tbody>
+        <tr><td>Many batteries fighting to set the voltage</td><td>One leader per island (largest healthy battery or the base). Every battery must be grid-forming and follow the shared sharing rule. If the leader fails, the next one takes over in about 20 ms.</td><td>Leader battery fails</td></tr>
+        <tr><td>Batteries can't push enough current to blow fuses</td><td>Every node compares current in and out of its section, so a fault shows up as a mismatch, not a big current. Backup: inverters add a small harmonic signal during faults that relays can read with no communication. A test pulse checks for faults before any close.</td><td>Tree hits the line · Comms cut</td></tr>
+        <tr><td>Lineworkers hit by power from an island</td><td>A padlock on the manual handle physically blocks closing. Software never re-energizes a locked section. A grounded line looks like a short and trips instantly.</td><td>Crew lockout</td></tr>
+        <tr><td>Radio or fiber links go down</td><td>Homes with batteries island themselves. The transformer coordinator still builds 15-home islands over its own wires using powerline signals.</td><td>Comms cut</td></tr>
+        <tr><td>Hackers switching off thousands of homes</td><td>No remote command can disconnect a home that the grid is still powering; only local measurements can. Commands must be signed and are rate-limited. Hidden radios are screened out in hardware audits.</td><td>Cyberattack</td></tr>
+        <tr><td>Switches flapping on and off</td><td>A switch holds 15 s after any move, and new homes are added only against the lowest solar output seen in the last minute.</td><td>Cloud flicker (toggle anti-flap to compare)</td></tr>
+        <tr><td>An island running out of energy</td><td>The lead battery lowers frequency as it drains. Below 59.75 Hz, homes drop AC and EV charging automatically, and the regional computer merges the island with a stronger neighbor or the base.</td><td>Batteries run low</td></tr>
+        <tr><td>Base at the end of a single line</td><td>The base connects to a second substation through a normally-open switch, powers itself first, and lends only its surplus.</td><td>Substation A fails · Regional blackout</td></tr>
+        <tr><td>A heat-wave night with no sun</td><td>Partly. Each node's clock caps its home by time of night, down to a 0.2 kW essentials floor when storage runs low. With 12 working batteries, all 90 homes stay on until about midnight on the clock schedule, or about 1:20 AM with sleep caps all night, instead of about 10:20 PM. The essentials floor lets the island restart at sunrise. The rest of the night still needs more storage.</td><td>Heat-wave night (switch the night plan to compare)</td></tr>
+        <tr><td>Reconnecting without damage</td><td>The loop switch opens before the main feed closes, so two substations are never tied together. Every close passes the IEEE 1547 sync limits.</td><td>Grid returns</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="var-h">
+  <h2 id="var-h">One control board, four switch sizes</h2>
+  <div class="two">
+    <div class="card tablewrap">
+      <table>
+        <thead><tr><th>Version</th><th>Where it goes</th><th>Switch</th><th>Rating</th><th>Est. cost</th></tr></thead>
+        <tbody>
+          <tr><td>Home node</td><td>Meter socket</td><td>Latching contactor in collar</td><td>200 A, 240 V</td><td class="num">$350–600</td></tr>
+          <tr><td>Transformer node</td><td>Pole or pad-mount transformer, low-voltage side</td><td>Motorized breaker with solid-state fast-trip stage</td><td>400–800 A, 240 V</td><td class="num">$4–9k</td></tr>
+          <tr><td>Section node</td><td>Feeder line at branch points</td><td>Standard smart recloser with Islet board as its controller</td><td>12–34 kV</td><td class="num">$50–120k</td></tr>
+          <tr><td>Base boundary</td><td>Edge of a base or campus</td><td>Recloser with base-first rules</td><td>12–34 kV</td><td class="num">$100k+</td></tr>
+        </tbody>
+      </table>
+      <p class="note" style="margin-top:8px">Home node price is installed in new construction. Section and base costs are mostly the recloser itself, which utilities already buy.</p>
+    </div>
+    <div class="card tablewrap">
+      <table>
+        <thead><tr><th>Home node part</th><th style="text-align:right">Est. at volume</th></tr></thead>
+        <tbody>
+          <tr><td>Metering IC (volts, amps, frequency, phase)</td><td class="num">$3.00</td></tr>
+          <tr><td>Main microcontroller (ESP32-S3 class)</td><td class="num">$3.00</td></tr>
+          <tr><td>Separate safety microcontroller</td><td class="num">$0.80</td></tr>
+          <tr><td>Secure element for signed commands</td><td class="num">$1.00</td></tr>
+          <tr><td>900 MHz mesh radio</td><td class="num">$7.00</td></tr>
+          <tr><td>Powerline modem</td><td class="num">$6.00</td></tr>
+          <tr><td>Two current sensors</td><td class="num">$8.00</td></tr>
+          <tr><td>200 A latching contactor</td><td class="num">$40.00</td></tr>
+          <tr><td>Handle, padlock hasp, viewing window</td><td class="num">$14.00</td></tr>
+          <tr><td>Supercapacitor hold-up</td><td class="num">$4.00</td></tr>
+          <tr><td>Real-time clock chip (keeps time through outages)</td><td class="num">$1.50</td></tr>
+          <tr><td>Collar housing and terminals</td><td class="num">$28.00</td></tr>
+          <tr><td>Circuit board, assembly, test</td><td class="num">$16.00</td></tr>
+          <tr><th>Total hardware</th><th style="text-align:right;font-family:var(--mono)">$132.30</th></tr>
+        </tbody>
+      </table>
+      <p class="note" style="margin-top:8px">Enforcing the night caps also needs relay-switched circuits in the home's panel for AC, water heater and EV charger, plus a separate essentials circuit. That adds about $30 to $60 in new construction.</p>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="cmp-h">
+  <h2 id="cmp-h">Against what exists today</h2>
+  <div class="card tablewrap">
+    <table>
+      <thead><tr><th>Capability</th><th>EPB Chattanooga smart switches</th><th>Meter collars (Enphase, Tesla)</th><th>Town microgrids (Borrego Springs, Redwood Coast)</th><th>ORNL dynamic boundaries</th><th>Islet</th></tr></thead>
+      <tbody>
+        <tr><td>Isolates faults automatically</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Islands a single home</td><td class="n">No</td><td class="y">Yes</td><td class="n">No</td><td class="n">No</td><td class="y">Yes</td></tr>
+        <tr><td>Islands about 15 homes at a transformer</td><td class="n">No</td><td class="n">No</td><td class="n">No</td><td class="n">No</td><td class="y">Yes</td></tr>
+        <tr><td>Island boundaries move with available energy</td><td class="n">No</td><td class="n">No</td><td class="n">Fixed area</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        <tr><td>Pools neighbors' home batteries</td><td class="n">No</td><td class="n">No</td><td class="n">No</td><td class="n">Not published</td><td class="y">Yes</td></tr>
+        <tr><td>Available to buy today</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">Field test 2027</td><td class="p">Concept</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="proof-h">
+  <h2 id="proof-h">What this proof of concept shows</h2>
+  <div class="card limits">
+    <div><h3 class="ok">Shown here</h3><p class="note">The control rules work together. In every scenario, islands form, faults stay isolated, locked sections stay dead, forged commands change nothing, and no close happens outside the sync limits. The tiers degrade safely when communication drops.</p></div>
+    <div><h3 class="warn">Not shown yet</h3><p class="note">The electrical physics. Power flow here is simplified to capacity and load. Real fault currents, inverter stability in the first few milliseconds, radio delays and three-phase balance need a circuit simulator and hardware.</p></div>
+    <div><h3>Next proof steps</h3><p class="note">Model one feeder in OpenDSS with these rules. Then build three bench nodes from a microcontroller, metering IC and relay on a 240 V test rig. Then pilot one transformer with a utility partner.</p></div>
+  </div>
+</section>
+</div>
+<script>
+const Engine=(function(){
+const HOLD=15, MARGIN=1.15;
+function label(z){
+  if(z==='SA')return'substation A'; if(z==='SB')return'substation B'; if(z==='BASE')return'the base';
+  if(/^M\d/.test(z))return'feeder section '+z.slice(1);
+  if(/^L\d/.test(z))return'transformer '+z.slice(1);
+  if(/^H/.test(z)){const [t,k]=z.slice(1).split('_');return'home '+t+'-'+k;}
+  return z;}
+function clockMin(m){return (m.night.start+(m.t-m.night.t0))%1440;}
+function fmtClock(n){const h=Math.floor(n/60),mm=String(n%60).padStart(2,'0');return ((h+11)%12+1)+':'+mm+(h<12?' AM':' PM');}
+function sunAt(n){if(n>=390&&n<570)return (n-390)/180;if(n>=570&&n<1170)return 1;return 0;}
+function log(m,tier,msg){if(m.night)msg=fmtClock(clockMin(m))+' · '+msg;m.log.push({t:m.t,tier,msg});if(m.log.length>300)m.log.shift();}
+function move(m,s,closed){s.closed=closed;s.last=m.t;m.ops.push(m.t);}
+function build(){
+  const m={t:0,zones:{},sw:{},order:[],log:[],gridA:true,gridB:true,backhaul:true,antiFlap:true,plan:'clock',
+    heat:false,cloud:false,sun:1,sunHist:[1],ops:[],rejected:0,lastClear:null,communityOn:true,fed:{},script:null,night:null};
+  const Z=(id,o)=>(m.zones[id]=Object.assign({id,type:'mv',gfm:0,cap:0,soc:0,solar:0,base:0,failed:false,fault:false,ground:false,tagged:false},o));
+  const S=(id,a,b,tier,o)=>{m.sw[id]=Object.assign({id,a,b,tier,closed:true,normal:true,lock:false,flock:false,last:-999},o);m.order.push(id);};
+  Z('SA',{type:'sub',src:'A'});Z('SB',{type:'sub',src:'B'});
+  ['M1','M2','M3'].forEach((id,i)=>Z(id,{type:'mv',region:i<2?'R1':'R2',gfm:250,cap:500,soc:0.85,community:true}));
+  Z('BASE',{type:'base',region:'C',gfm:2000,base:1200,soc:1});
+  S('S1','SA','M1','section',{region:'R1'});S('S2','M1','M2','section',{region:'R1'});S('S3','M2','M3','section',{region:'R2'});
+  S('BS','M3','BASE','base',{region:'C'});S('TIE','BASE','SB','tie',{region:'C',closed:false,normal:false});
+  const par=['M1','M1','M2','M2','M3','M3'];
+  for(let t=1;t<=6;t++){const L='L'+t,reg=t<=4?'R1':'R2';
+    Z(L,{type:'lv',region:reg,mv:par[t-1]});S('T'+t,par[t-1],L,'xfmr',{region:reg});
+    for(let k=1;k<=15;k++){const h='H'+t+'_'+k,kind=k%3===1?'bat':k%3===2?'pv':'none';
+      Z(h,{type:'home',kind,lv:L,k,gfm:kind==='bat'?10:0,cap:kind==='bat'?13.5:0,
+        soc:kind==='bat'?0.6+((t*7+k*13)%35)/100:0,solar:kind==='pv'?4:0});
+      S('N'+t+'_'+k,L,h,'home',{region:reg});}}
+  snapshot(m);return m;}
+function stage(m){if(!m.night||m.plan==='off')return null;const n=clockMin(m);
+  if(m.plan==='sleep'){if(n>=1260||n<390)return{key:'sleepall',cap:0.5,name:'Sleep cap'};return{key:'day',cap:Math.round((0.7+1.5*m.sun)*100)/100,name:'Daytime, rising with solar'};}
+  if(n>=1260&&n<1380)return{key:'eve',cap:1.0,name:'Evening'};
+  if(n>=1380||n<330)return{key:'sleep',cap:0.5,name:'Asleep'};
+  if(n<390)return{key:'wake',cap:0.7,name:'Waking up'};
+  return{key:'day',cap:Math.round((0.7+1.5*m.sun)*100)/100,name:'Daytime, rising with solar'};}
+function homeKW(m,I){const d=m.heat?2.2:1.2;if(!I||I.src)return d;const st=stage(m);
+  if(!st)return d*(I.conserve?0.6:1);
+  if(I.emergency)return 0.2;let kw=Math.min(d,st.cap);if(I.conserve)kw=Math.max(0.2,kw*0.6);return kw;}
+function evalIsland(m,zs){
+  const I={zones:zs,src:null,gf:[],cap:0,solar:0,load:0,homes:[],faulted:false,tagged:false,f:60,conserve:false,emergency:false,leader:null,energized:false,avg:0};
+  let sw=0,cw=0;
+  for(const id of zs){const z=m.zones[id];
+    if(z.type==='sub'&&(z.src==='A'?m.gridA:m.gridB))I.src='grid '+z.src;
+    if(z.fault||z.ground)I.faulted=true;
+    if(z.tagged)I.tagged=true;
+    if(z.type==='home')I.homes.push(id);
+    if(z.solar)I.solar+=z.solar;
+    if(z.gfm>0&&!z.failed&&!z.tagged&&(z.soc>0.05||(z.type==='home'&&z.soc>0.005&&m.sun>=0.25))&&!(z.community&&!m.communityOn)){
+      I.gf.push(id);I.cap+=z.type==='base'?z.base+0.8*(z.gfm-z.base):z.gfm;
+      const kwh=z.type==='base'?1e6:z.cap;sw+=z.soc*kwh;cw+=kwh;}}
+  I.avg=cw?sw/cw:0;
+  if(!I.src&&I.gf.length){I.f=Math.round((59.5+0.5*I.avg)*100)/100;I.conserve=I.f<59.75;I.emergency=!!stage(m)&&(I.f<59.625||(m.night.emerg&&I.f<59.675));}
+  I.load=I.homes.length*homeKW(m,I)+(zs.includes('BASE')?m.zones.BASE.base:0);
+  I.capNow=I.cap+I.solar*m.sun;
+  I.capFirm=I.cap+I.solar*(m.antiFlap?Math.min(...m.sunHist):m.sun);
+  if(I.src)I.energized=true;else if(I.faulted||I.tagged){I.gf=[];I.cap=0;I.capNow=0;I.capFirm=0;}else if(I.gf.length&&I.capNow>=I.load-1e-9)I.energized=true;
+  if(!I.src&&I.gf.length){let b=-1;for(const id of I.gf){const z=m.zones[id];
+    const s=z.type==='base'?1e9:z.gfm*z.soc*(z.community?3:1);if(s>b){b=s;I.leader=id;}}}
+  I.root=I.src?(zs.includes('SA')&&m.gridA?'SA':'SB'):I.leader;
+  I.id=I.root||zs.slice().sort()[0];
+  return I;}
+function islands(m){
+  const p={};const f=x=>{while(p[x]!==x){p[x]=p[p[x]];x=p[x];}return x;};
+  for(const z in m.zones)p[z]=z;
+  for(const id of m.order){const s=m.sw[id];if(s.closed){const a=f(s.a),b=f(s.b);if(a!==b)p[a]=b;}}
+  const g={};for(const z in m.zones){const r=f(z);(g[r]=g[r]||[]).push(z);}
+  const list=Object.values(g).map(zs=>evalIsland(m,zs));const by={};
+  list.forEach(I=>I.zones.forEach(z=>by[z]=I));return{list,by};}
+function snapshot(m){const I=islands(m);m.fed={};
+  for(const z in m.zones){const i=I.by[z];m.fed[z]=i.src?'grid':i.energized?'micro':null;}}
+function adjacentTrip(m,zid){const out=[];
+  for(const id of m.order){const s=m.sw[id];if(s.closed&&(s.a===zid||s.b===zid)){move(m,s,false);s.flock=true;out.push(id);}}
+  return out;}
+function local(m){
+  let I=islands(m);
+  for(const isl of I.list){if(!isl.energized||!(isl.faulted||isl.tagged))continue;
+    for(const zid of isl.zones){const z=m.zones[zid];if(!(z.fault||z.ground||z.tagged))continue;
+      const tr=adjacentTrip(m,zid);if(!tr.length)continue;
+      const ms=m.backhaul?12:38;m.lastClear=ms;
+      log(m,'fault',(z.ground?'Grounded line in ':z.fault?'Fault in ':'Power reached locked ')+label(zid)+': '+
+        (m.backhaul?'current-mismatch protection':'harmonic backup (no comms)')+' opened '+tr.join(', ')+' in '+ms+' ms');}}
+  I=islands(m);
+  for(const isl of I.list){if(isl.src)continue;if(!isl.zones.some(z=>m.fed[z]==='grid'))continue;
+    let n=0,bat=0;
+    for(const id of m.order){const s=m.sw[id];if(!s.closed)continue;
+      if(isl.zones.includes(s.a)&&isl.zones.includes(s.b)){move(m,s,false);n++;
+        const hz=m.zones[s.b];if(s.tier==='home'&&hz.gfm>0&&!hz.failed)bat++;}}
+    if(n)log(m,'local','Grid voltage lost: '+n+' switches opened within 50 ms; '+bat+' battery homes keep running on their own'+
+      (isl.zones.includes('BASE')?'; base islands itself on its own generation':''));}
+  I=islands(m);
+  for(const isl of I.list){if(isl.src||!isl.gf.length)continue;let cur=isl,g=0;
+    while(cur.capNow<cur.load-1e-9&&g++<60){
+      const c=m.order.map(id=>m.sw[id]).filter(s=>s.closed&&s.tier==='home'&&cur.zones.includes(s.b));
+      if(!c.length)break;
+      c.sort((a,b)=>((m.zones[a.b].gfm>0&&!m.zones[a.b].failed)-(m.zones[b.b].gfm>0&&!m.zones[b.b].failed))||b.last-a.last);
+      const s=c[0];move(m,s,false);
+      log(m,'local','Island short on power ('+cur.load.toFixed(0)+' kW load, '+cur.capNow.toFixed(0)+' kW available): '+label(s.b)+' dropped');
+      cur=evalIsland(m,cur.zones.filter(z=>z!==s.b));}}}
+function normalPathOK(m){return m.gridA&&['S1','S2','S3','BS'].every(id=>!m.sw[id].lock&&!m.sw[id].flock)&&
+  ['M1','M2','M3'].every(z=>!m.zones[z].fault&&!m.zones[z].ground&&!m.zones[z].tagged);}
+function hsh(s){let h=7;for(const c of s)h=(h*31+c.charCodeAt(0))%997;return h;}
+function sync(s,t){const h=hsh(s.id)+t;return{df:(0.02+(h%12)/100).toFixed(2),dv:(1+h%5).toFixed(1),dp:3+h%12};}
+function evalClose(m,s,I,manual){
+  if(s.closed)return{ok:false,why:'already closed'};
+  if(s.lock)return{ok:false,why:'crew padlock on the handle'};
+  if(s.flock)return{ok:false,why:'locked out after a fault (needs a crew reset)'};
+  const dt=m.night?60:1;if(!manual&&m.antiFlap&&(m.t-s.last)*dt<HOLD)return{ok:false,why:'hold time ('+(HOLD-(m.t-s.last)*dt)+' s left)'};
+  const A=I.by[s.a],B=I.by[s.b];
+  if(A===B)return{ok:false,why:'both sides already in the same island'};
+  if(!A.energized&&!B.energized)return{ok:false,why:'both sides dead; nothing to power from'};
+  const dead=!A.energized?A:!B.energized?B:null;
+  if(dead&&dead.faulted)return{ok:false,why:'test pulse found a fault on the dead side',fault:true};
+  if(A.faulted||B.faulted)return{ok:false,why:'a fault is present'};
+  if(A.tagged||B.tagged)return{ok:false,why:'a crew is working in that section'};
+  if(A.src&&B.src)return{ok:false,why:'would tie two grid-fed areas together'};
+  if(dead&&dead.zones.some(z=>m.zones[z].type==='sub'))return{ok:false,why:'never back-feeds a dead substation'};
+  if(s.tier==='tie'&&(!(A.src||B.src)||normalPathOK(m)))return{ok:false,why:'loop switch only closes when the normal feed is unavailable'};
+  const M=evalIsland(m,A.zones.concat(B.zones));
+  if(!M.src){const need=M.load*(m.antiFlap?MARGIN:1);
+    if(M.capFirm<need)return{ok:false,why:'not enough firm capacity ('+M.capFirm.toFixed(0)+' kW for '+need.toFixed(0)+' kW)'};}
+  const pw=i=>i.energized?i.homes.length:0;
+  let score=(M.homes.length-pw(A)-pw(B))*10;
+  if(dead)score+=1;
+  if(M.src&&A.energized&&B.energized)score+=2;
+  if(!M.src&&A.energized&&B.energized){score+=1;if(A.conserve||B.conserve)score+=6;}
+  if(s.tier==='tie')score+=3;
+  const y=sync(s,m.t);
+  const how=(A.energized&&B.energized)?' after sync check (Δf '+y.df+' Hz, ΔV '+y.dv+'%, Δφ '+y.dp+'°)':' after a clear test pulse';
+  let msg;
+  if(s.tier==='home')msg=label(s.b)+' joined '+label(s.a)+how;
+  else if(s.tier==='xfmr')msg=label(s.b)+' island connected to '+label(s.a)+how;
+  else if(s.tier==='tie')msg='Loop switch TIE closed: substation B now feeds the base'+how;
+  else if(s.tier==='base')msg='Base link BS closed: base lends surplus to '+label(s.a)+how;
+  else msg=s.id+' closed, joining '+label(s.a)+' and '+label(s.b)+how;
+  return{ok:true,score,msg,M};}
+function tierName(s){return s.tier==='home'?'xfmr':s.tier==='base'||s.tier==='tie'?'central':'regional';}
+function growth(m){
+  let I=islands(m);
+  if(m.backhaul&&m.sw.TIE.closed&&normalPathOK(m)&&m.t-m.sw.TIE.last>=(m.antiFlap?HOLD:0)){move(m,m.sw.TIE,false);
+    log(m,'central','Normal feed healthy: loop switch TIE opened first so substations A and B are never tied together');I=islands(m);}
+  const c=[];
+  for(const id of m.order){const s=m.sw[id];if(s.closed||s.lock||s.flock)continue;
+    if(s.tier!=='home'&&!m.backhaul)continue;
+    const e=evalClose(m,s,I,false);
+    if(e.fault&&!s.flock){s.flock=true;log(m,'fault','Test pulse from '+s.id+' found a fault; '+s.id+' locked out');continue;}
+    if(e.ok&&e.score>0)c.push({s,score:e.score});}
+  c.sort((a,b)=>b.score-a.score);
+  const used=new Set();
+  for(const x of c){const s=x.s;const key=s.tier==='home'?'LV'+s.a:(s.tier==='base'||s.tier==='tie')?'C':s.region;
+    if(used.has(key))continue;I=islands(m);const e=evalClose(m,s,I,false);if(!e.ok||e.score<=0)continue;
+    used.add(key);move(m,s,true);log(m,tierName(s),e.msg);}
+  return used.size>0;}
+function drain(m,sec){const I=islands(m);
+  for(const isl of I.list){if(isl.src||!isl.energized)continue;
+    const bats=isl.gf.map(id=>m.zones[id]).filter(z=>z.type!=='base');if(!bats.length)continue;
+    if(isl.gf.includes('BASE'))continue;
+    const net=isl.load-isl.solar*m.sun,tot=bats.reduce((a,z)=>a+z.gfm,0);
+    for(const z of bats){const b=z.soc;z.soc=Math.max(0,Math.min(1,z.soc-net*(z.gfm/tot)*sec/3600/z.cap));
+      if(b>0.05&&z.soc<=0.05){z.soc=Math.max(z.soc,0.04);log(m,'local','Battery at '+label(z.id)+' hit its 5% reserve and stopped (reserve kept for a sunrise restart)');}}}}
+function runScript(m){if(!m.script)return;const rel=m.t-m.script.start;
+  for(const e of m.script.ev){if(!e.done&&rel>=e.at+1){e.done=true;e.fn(m);}}}
+function tick(m){m.t+=1;runScript(m);
+  m.sun=m.night?sunAt(clockMin(m)):m.cloud?(Math.floor(m.t/5)%2?0.3:1):1;m.sunHist.push(m.sun);if(m.sunHist.length>60)m.sunHist.shift();
+  local(m);if(growth(m)&&m.night){for(let k=0;k<30&&growth(m);k++);}
+  drain(m,m.night?60:1);if(m.night){snapshot(m);local(m);}snapshot(m);m.ops=m.ops.filter(t=>m.t-t<60);
+  if(m.night)nightBook(m);}
+function poweredHomes(m){const I=islands(m);let n=0;for(const z of Object.values(m.zones))if(z.type==='home'&&I.by[z.id].energized)n++;return n;}
+function energyLeft(m){let e=0;for(const z of Object.values(m.zones))if(z.type==='home'&&z.gfm>0&&!z.failed)e+=Math.max(0,z.soc-0.05)*z.cap;return e;}
+const STAGE_MSG={eve:'evening. Every home capped at 1.0 kW (AC on a higher setpoint, plus essentials)',
+  sleep:'sleep hours. Every home capped at 0.5 kW (one cool bedroom, fridge, fan, router, medical)',
+  sleepall:'sleep caps all night. Every home capped at 0.5 kW until sunrise (one cool bedroom, fridge, fan, router, medical)',
+  wake:'waking up. Cap rises to 0.7 kW',day:'sunrise. The cap now rises with solar output'};
+function nightBook(m){const n=clockMin(m),p=poweredHomes(m),N=m.night;N.hist.push({min:n,p,e:energyLeft(m)});
+  if(p===0&&N.prevP>0){if(N.out==null)N.out=n;if(N.back!=null){N.failAt=N.back;N.back=null;}}if(p>0&&N.prevP===0&&N.out!=null)N.back=n;N.prevP=p;
+  const st=stage(m);if(st&&st.key!==N.stage){N.stage=st.key;log(m,'local','Node clocks: '+STAGE_MSG[st.key]);}
+  const em=islands(m).list.some(i=>i.energized&&i.emergency);
+  if(em&&!N.emerg&&m.t-(N.emT||-99)>=15){log(m,'local','Island batteries under 25%: frequency drops below 59.63 Hz and every home falls to its 0.2 kW essentials circuit');N.emT=m.t;}
+  N.emerg=em;
+  if(n===390)log(m,'regional','Sunrise: solar starts ramping up; reserve batteries can restart islands once the sun is strong enough');
+  if(n===480&&!N.done){N.done=true;const h=N.hist,dark=h.filter(x=>x.p===0).length,hh=h.reduce((a,x)=>a+x.p,0)/60;
+    log(m,'regional','Night summary, 9 PM to 8 AM: '+(N.out!=null?'lights out at '+fmtClock(N.out)+'. '+(N.back!=null?'Back on at '+fmtClock(N.back)+' and holding. ':N.failAt!=null?'A sunrise restart at '+fmtClock(N.failAt)+' failed, so still dark at 8 AM. ':'Still dark at 8 AM. '):'Some homes had power all night. ')+
+      'Up to '+h.reduce((a,x)=>Math.max(a,x.p),0)+' homes, average '+(h.reduce((a,x)=>a+x.p,0)/h.length).toFixed(0)+'. '+
+      hh.toFixed(0)+' of '+(h.length*1.5).toFixed(0)+' possible home-hours powered. Fully dark for '+(dark/60).toFixed(1)+' hours.');}}
+function skipHour(m){drain(m,3600);log(m,'regional','One hour later: island batteries drained by their load minus solar');local(m);snapshot(m);}
+function lockSw(m,id,on,who){const s=m.sw[id];s.lock=on;if(on&&s.closed){move(m,s,false);}
+  log(m,'crew',(who||'Crew')+(on?' padlocked '+id+' open':' removed the padlock from '+id));}
+function manualClose(m,id){const s=m.sw[id];const e=evalClose(m,s,islands(m),true);
+  if(!e.ok){m.rejected++;log(m,'crew','Close request on '+id+' refused: '+e.why);return e;}
+  move(m,s,true);log(m,'crew','Manual close on '+id+' passed the permit'+e.msg.slice(e.msg.indexOf(' after')));return e;}
+function manualOpen(m,id){const s=m.sw[id];if(!s.closed)return;move(m,s,false);log(m,'crew','Manual handle opened '+id+' (mechanical, no permission needed)');}
+function blackout(m){m.gridA=false;m.gridB=false;log(m,'fault','Regional blackout: substations A and B both lost');}
+function baseOffline(m){m.sw.BS.lock=true;if(m.sw.BS.closed)move(m,m.sw.BS,false);log(m,'crew','Base link BS padlocked open (base keeps its power for its own mission)');}
+function repair(m){for(const id of m.order){const s=m.sw[id];s.lock=false;s.flock=false;}
+  for(const z of Object.values(m.zones)){z.fault=false;z.ground=false;z.tagged=false;z.failed=false;}
+  m.gridA=true;m.gridB=true;m.backhaul=true;m.cloud=false;m.heat=false;m.communityOn=true;m.night=null;
+  log(m,'crew','Repairs done: padlocks off, faults cleared, grounds removed. Both substations back on');}
+const SCEN={
+  normal:{name:'Normal day',sub:'Reset, grid on',ev:[]},
+  subA:{name:'Substation A fails',sub:'Loop through the base',ev:[[0,m=>{m.gridA=false;log(m,'fault','Substation A lost (transmission line down)');}]]},
+  blackout:{name:'Regional blackout',sub:'Both substations down',ev:[[0,blackout]]},
+  tree:{name:'Tree hits the line',sub:'Fault in section 2',ev:[[0,m=>{m.zones.M2.fault=true;log(m,'fault','Tree branch shorts feeder section 2');}]]},
+  crew:{name:'Crew lockout',sub:'Padlocks and a grounded line',ev:[
+    [0,m=>{['S2','S3','T3','T4'].forEach(id=>lockSw(m,id,true,'Line crew'));m.zones.M2.tagged=true;log(m,'crew','Section 2 tagged: every path power could enter is padlocked, including both transformers');}],
+    [4,m=>{m.zones.M2.ground=true;log(m,'crew','Crew grounds the line in section 2 and starts work');}],
+    [9,m=>{log(m,'cyber','Test: central computer sends CLOSE to S2');manualClose(m,'S2');}],
+    [12,m=>{log(m,'cyber','Test: buggy software tries to close T3 into the work zone');manualClose(m,'T3');}]]},
+  comms:{name:'Comms cut',sub:'Blackout with radios down',ev:[
+    [0,m=>{m.backhaul=false;log(m,'fault','Radio and fiber links to the regional and central computers lost');}],
+    [2,blackout],
+    [30,m=>{m.zones.L4.fault=true;log(m,'fault','Squirrel shorts the low-voltage line at transformer 4');}]]},
+  cyber:{name:'Cyberattack',sub:'Forged mass shutoff',ev:[
+    [0,m=>{m.rejected+=90;log(m,'cyber','90 forged OPEN commands sent to every home: signature check failed, all 90 ignored');}],
+    [4,m=>{m.rejected+=90;log(m,'cyber','90 OPEN commands signed with a stolen key: nodes measure a healthy grid, and a remote command can never disconnect a powered home. All 90 refused');}],
+    [8,m=>{m.rejected+=500;log(m,'cyber','500 reconfiguration requests flood region R1: rate limit allows 5 per minute and each still needs the close permit. 500 refused');}]]},
+  leader:{name:'Leader battery fails',sub:'Handoff inside an island',ev:[
+    [0,m=>{m.communityOn=false;baseOffline(m);blackout(m);}],
+    [30,m=>{const I=islands(m),isl=I.by.L1;if(!isl.leader)return;const z=m.zones[isl.leader];z.failed=true;
+      const n=evalIsland(m,isl.zones);log(m,'local','Leader battery at '+label(z.id)+' failed; '+(n.leader?label(n.leader)+' took over voltage and frequency in 20 ms':'no backup leader'));}]]},
+  low:{name:'Batteries run low',sub:'Frequency signal and sharing',ev:[
+    [0,m=>{baseOffline(m);blackout(m);}],
+    [25,m=>{for(const z of Object.values(m.zones))if(z.gfm>0&&z.type!=='base')z.soc=0.25;
+      log(m,'regional','Hours later: island batteries at 25%. Leader lowers frequency to signal homes to save power');}],
+    [45,m=>{lockSw(m,'BS',false,'Base commander');log(m,'central','Base approves lending its surplus to the neighborhood');}]]},
+  cloud:{name:'Cloud flicker',sub:'Heat wave, passing clouds',ev:[[0,m=>{m.heat=true;m.communityOn=false;baseOffline(m);
+    for(const z of Object.values(m.zones))if(z.kind==='bat'&&z.k>=7)z.failed=true;
+    blackout(m);m.cloud=true;log(m,'regional','Heat wave night-into-morning: AC load 2.2 kW per home, clouds cut solar to 30% every few seconds');}]]},
+  night:{name:'Heat-wave night',sub:'Worst case: no sun until 6:30 AM',ev:[[0,m=>{m.heat=true;m.communityOn=false;baseOffline(m);
+    for(const z of Object.values(m.zones))if(z.kind==='bat'&&z.k>=7)z.failed=true;
+    m.night={start:21*60,t0:m.t,hist:[],done:false};blackout(m);
+    log(m,'regional','Heat-wave night: AC load 2.2 kW per home, no solar, 12 of 30 home batteries working, community batteries off, base keeping its power. 1 second here = 1 minute of night');}]]},
+  ret:{name:'Repair, grid returns',sub:'Resync and restore',keep:true,ev:[[0,repair]]}};
+function start(m,key){const sc=SCEN[key];const mm=sc.keep?m:build();if(!sc.keep){mm.antiFlap=m?m.antiFlap:true;mm.plan=m&&m.plan?m.plan:'clock';}
+  mm.script={key,start:mm.t,ev:sc.ev.map(([at,fn])=>({at,fn,done:false}))};
+  if(!sc.keep)log(mm,'central','Scenario: '+sc.name);else log(mm,'central','Scenario: '+sc.name);return mm;}
+function flow(m,s,I){const isl=I.by[s.a];if(!s.closed||!isl.energized||!isl.root)return 0;
+  const adj={};for(const id of m.order){const w=m.sw[id];if(!w.closed||I.by[w.a]!==isl)continue;
+    (adj[w.a]=adj[w.a]||[]).push(w.b);(adj[w.b]=adj[w.b]||[]).push(w.a);}
+  const depth={[isl.root]:0},q=[isl.root];while(q.length){const z=q.shift();for(const n of adj[z]||[])if(!(n in depth)){depth[n]=depth[z]+1;q.push(n);}}
+  const child=depth[s.a]>depth[s.b]?s.a:s.b,seen=new Set([child===s.a?s.b:s.a]),st=[child];let kw=0;
+  while(st.length){const z=st.pop();if(seen.has(z))continue;seen.add(z);const zz=m.zones[z];
+    if(zz.type==='home')kw+=homeKW(m,isl);if(zz.type==='base')kw+=zz.base;for(const n of adj[z]||[])st.push(n);}
+  return kw;}
+return{stage,clockMin,fmtClock,energyLeft,poweredHomes,build,tick,islands,evalIsland,evalClose,start,SCEN,label,flow,lockSw,manualClose,manualOpen,skipHour,homeKW,HOLD,normalPathOK};
+})();
+if(typeof module!=='undefined')module.exports=Engine;
+(function(){
+const E=Engine,$=id=>document.getElementById(id);
+let m=E.start(E.build(),'blackout');for(let i=0;i<24;i++)E.tick(m);
+let active='blackout',sel='S3',playing=!matchMedia('(prefers-reduced-motion: reduce)').matches,speeds=[1,4,10],si=1,timer=null;
+const FY=225,SX={S1:110,S2:370,S3:630,BS:865},LX=[0,180,300,440,560,700,800],SEG={M1:[110,370],M2:[370,630],M3:[630,865]};
+const PAR=[0,'M1','M1','M2','M2','M3','M3'];
+function hsh(s){let h=3;for(const c of s)h=(h*17+c.charCodeAt(0))%1009;return h;}
+function col(I){if(!I||!I.energized)return null;if(I.src)return'var(--hot)';return'var(--i'+(hsh(I.id)%6+1)+')';}
+function line(x1,y1,x2,y2,c,w){return`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" style="stroke:${c||'var(--rule)'};stroke-width:${w||3}${c?'':';stroke-dasharray:5 4'}"/>`;}
+function swg(id,x,y,c){const s=m.sw[id];const f=s.closed?(c||'var(--muted)'):'var(--panel)';
+  let g=`<g class="hit" data-sw="${id}"><circle cx="${x}" cy="${y}" r="13" style="fill:transparent"/>`;
+  if(sel===id)g+=`<circle cx="${x}" cy="${y}" r="11" style="fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:2 2"/>`;
+  g+=`<circle cx="${x}" cy="${y}" r="7" style="fill:${f};stroke:${s.flock?'var(--fault)':'var(--ink)'};stroke-width:${s.flock?2.6:1.4}"/>`;
+  if(s.lock)g+=`<rect x="${x-5}" y="${y-22}" width="10" height="8" rx="1.5" style="fill:var(--hot)"/><path d="M${x-3} ${y-22}v-3a3 3 0 0 1 6 0v3" style="fill:none;stroke:var(--hot);stroke-width:1.6"/>`;
+  return g+'</g>';}
+function mark(x,y,z){const t=z.ground?'grounded':z.tagged&&!z.fault?'crew working':'fault';
+  return`<path d="M${x-6} ${y-6}l12 12M${x+6} ${y-6}l-12 12" style="stroke:var(--fault);stroke-width:2.4"/><text x="${x}" y="${y+20}" text-anchor="middle" class="svgm" font-size="10.5" style="fill:var(--fault)">${t}</text>`;}
+function box(x,y,w,h,t,sub,c){return`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5" style="fill:var(--panel);stroke:${c||'var(--rule)'};stroke-width:${c?2:1}"/>`+
+  `<text x="${x+w/2}" y="${y+(sub?h/2-2:h/2+4)}" text-anchor="middle" class="svgd" font-size="14">${t}</text>`+
+  (sub?`<text x="${x+w/2}" y="${y+h/2+12}" text-anchor="middle" class="svgm" font-size="10">${sub}</text>`:'');}
+function draw(){const I=E.islands(m),by=I.by,c=z=>col(by[z]);let o='';
+  const bh=m.backhaul,cl=bh?'var(--accent)':'var(--fault)',da=bh?'4 4':'2 5';
+  const cm=(x1,y1,x2,y2)=>`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" style="stroke:${cl};stroke-width:1;stroke-dasharray:${da};opacity:.7"/>`;
+  o+=cm(500,42,240,60)+cm(500,42,748,60)+cm(240,90,110,212)+cm(240,90,370,212)+cm(748,90,630,212)+cm(748,90,865,212)+cm(570,26,945,152);
+  o+=box(430,10,140,32,'Central computer','',null)+box(180,60,120,30,'Regional R1','',null)+box(688,60,120,30,'Regional R2','',null);
+  if(!bh)o+=`<text x="500" y="56" text-anchor="middle" class="svgm" font-size="10.5" style="fill:var(--fault)">links down</text>`;
+  o+=box(10,205,72,40,'Sub A',m.gridA?'grid on':'down',m.gridA?'var(--hot)':'var(--fault)');
+  o+=box(900,110,90,30,'Sub B','',m.gridB?'var(--hot)':'var(--fault)');
+  o+=line(82,FY,103,FY,c('SA'),4);
+  for(const [z,[a,b]] of Object.entries(SEG)){o+=line(a+8,FY,b-8,FY,c(z),4);const zz=m.zones[z],mx=(a+b)/2;
+    const on=m.communityOn&&!zz.tagged&&!zz.fault&&!zz.ground;
+    o+=`<rect x="${mx-16}" y="${FY-38}" width="32" height="16" rx="3" style="fill:${on?'var(--soft)':'var(--panel)'};stroke:var(--muted);stroke-dasharray:${on?'0':'3 2'}"/><text x="${mx}" y="${FY-26}" text-anchor="middle" class="svgm" font-size="10">CB</text>`;
+    if(zz.fault||zz.ground||zz.tagged)o+=mark(mx+40,FY,zz);}
+  o+=line(873,FY,890,FY,c('BASE'),4);
+  const bc=c('BASE');o+=`<rect x="890" y="200" width="100" height="58" rx="5" style="fill:var(--panel);stroke:${bc||'var(--rule)'};stroke-width:2"/>`+
+    `<text x="940" y="223" text-anchor="middle" class="svgd" font-size="15">Base</text><text x="940" y="240" text-anchor="middle" class="svgm" font-size="10">2 MW generation</text>`;
+  o+=line(945,140,945,158,c('SB'),3)+line(945,172,945,200,bc,3);
+  for(let t=1;t<=6;t++){const x=LX[t],L='L'+t,lc=c(L),mc=c(PAR[t]);
+    o+=line(x,FY,x,250,mc,2.5)+line(x,266,x,276,lc,2.5);
+    o+=`<circle cx="${x}" cy="${281}" r="5" style="fill:none;stroke:${lc||'var(--muted)'};stroke-width:1.6"/><circle cx="${x}" cy="${289}" r="5" style="fill:none;stroke:${lc||'var(--muted)'};stroke-width:1.6"/>`;
+    o+=line(x-45,300,x+45,300,lc,3);
+    if(m.zones[L].fault)o+=mark(x+52,300,m.zones[L]);
+    for(let k=1;k<=15;k++){const h='H'+t+'_'+k,z=m.zones[h],s=m.sw['N'+t+'_'+k],hc=c(h),cx=x-43+((k-1)%5)*18,cy=308+Math.floor((k-1)/5)*18,id='N'+t+'_'+k;
+      o+=`<g class="hit" data-sw="${id}"><rect x="${cx}" y="${cy}" width="14" height="14" rx="2" style="fill:${hc||'var(--panel)'};stroke:${sel===id?'var(--accent)':s.closed?'var(--ink)':'var(--muted)'};stroke-width:${sel===id?2.2:1};${s.closed?'':'stroke-dasharray:2 2'}"/>`;
+      if(z.kind==='bat')o+=`<rect x="${cx+2}" y="${cy+9}" width="10" height="3" style="fill:${z.failed?'var(--fault)':'var(--ink)'}"/>`;
+      if(z.kind==='pv')o+=`<circle cx="${cx+7}" cy="${cy+7}" r="2.2" style="fill:var(--ink)"/>`;
+      o+='</g>';}
+    o+=`<text x="${x}" y="370" text-anchor="middle" class="svgm" font-size="10.5">T${t} · 15 homes</text>`;}
+  for(const id of ['S1','S2','S3','BS'])o+=swg(id,SX[id],FY,c(m.sw[id].a));
+  o+=swg('TIE',945,165,c('SB'));
+  for(let t=1;t<=6;t++)o+=swg('T'+t,LX[t],258,c(PAR[t]));
+  o+=`<path d="M135 388v6h470v-6" style="fill:none;stroke:var(--rule)"/><text x="370" y="408" text-anchor="middle" class="svgm" font-size="10.5">REGION R1</text>`;
+  o+=`<path d="M655 388v6h335v-6" style="fill:none;stroke:var(--rule)"/><text x="822" y="408" text-anchor="middle" class="svgm" font-size="10.5">REGION R2 + BASE</text>`;
+  const lg=[['line','var(--hot)','Grid power'],['line','var(--i1)','Island (one color each)'],['dead','','No power'],['closed','','Closed switch'],['open','','Open switch'],['flock','','Locked out by fault'],['lock','','Crew padlock']];
+  let lx=20;for(const [k,cc,t] of lg){const y=446;
+    if(k==='line')o+=line(lx,y,lx+22,y,cc,4);else if(k==='dead')o+=line(lx,y,lx+22,y,null,3);
+    else if(k==='lock')o+=`<rect x="${lx+6}" y="${y-3}" width="10" height="8" rx="1.5" style="fill:var(--hot)"/><path d="M${lx+8} ${y-3}v-3a3 3 0 0 1 6 0v3" style="fill:none;stroke:var(--hot);stroke-width:1.6"/>`;
+    else o+=`<circle cx="${lx+11}" cy="${y}" r="6" style="fill:${k==='closed'?'var(--muted)':'var(--panel)'};stroke:${k==='flock'?'var(--fault)':'var(--ink)'};stroke-width:${k==='flock'?2.4:1.3}"/>`;
+    o+=`<text x="${lx+28}" y="${y+4}" class="svgt" font-size="11.5">${t}</text>`;lx+=28+t.length*6.2+18;}
+  $('grid').innerHTML=o;$('clock').textContent=m.night?E.fmtClock(E.clockMin(m))+' · 1 s = 1 min':'t = '+m.t+' s';
+  metrics(I);insp(I);logs();}
+function metrics(I){const homes=Object.values(m.zones).filter(z=>z.type==='home');let g=0,mi=0;
+  for(const h of homes){const i=I.by[h.id];if(i.src)g++;else if(i.energized)mi++;}
+  const isl=I.list.filter(i=>i.energized&&!i.src&&i.homes.length);const big=isl.reduce((a,i)=>Math.max(a,i.homes.length),0);
+  const fmin=isl.length?Math.min(...isl.map(i=>i.f)):60;const bi=I.by.BASE;
+  const base=bi.src?'On grid':bi.homes.length?'Lending':'Islanded';
+  const tiles=[[g+mi+' / 90','Homes with power · '+g+' grid, '+mi+' island'],[isl.length,'Islands · largest '+big+' homes'],
+    [fmin.toFixed(2)+' Hz','Lowest island frequency'+(isl.some(i=>i.emergency)?' · essentials only':fmin<59.75?' · saving power':'')],[m.ops.length,'Switch moves, last '+(m.night?'hour':'60 s')],
+    [m.rejected,'Commands refused'],[base,'Base status']];
+  if(m.night){const st=E.stage(m),top=isl.reduce((a,i)=>!a||i.homes.length>a.homes.length?i:a,null);
+    const cap=top?E.homeKW(m,top):st?st.cap:(m.heat?2.2:1.2);
+    const why=!st?'Night plan off · full AC':top&&top.emergency?'Essentials floor · storage under 25%':top&&top.conserve?st.name+' · cut 40%, storage under half':st.name+' · set by node clocks';
+    tiles.splice(4,1);tiles.unshift([E.fmtClock(E.clockMin(m)),'Night clock · sunrise 6:30 AM'],[E.energyLeft(m).toFixed(0)+' kWh','Battery energy left above reserve'],[cap.toFixed(1)+' kW','Cap per home · '+why]);}
+  $('metrics').innerHTML=tiles.map(([b,s])=>`<div class="metric"><b>${b}</b><span>${s}</span></div>`).join('');}
+const TN={home:'Home node',xfmr:'Transformer node',section:'Section node',base:'Base boundary node',tie:'Loop switch (normally open)'};
+function volts(z,I){const zz=m.zones[z];if(!I.by[z].energized)return'0 V';return zz.type==='home'||zz.type==='lv'?'240 V':'12.47 kV';}
+function insp(I){if(!sel){$('insp').innerHTML='<h3>Node inspector</h3><p class="note">Select a switch or a home on the diagram.</p>';return;}
+  const s=m.sw[sel],A=I.by[s.a],B=I.by[s.b],lv=s.tier==='home'||s.tier==='xfmr';
+  const kw=E.flow(m,s,I),amps=lv?kw*1000/240:kw*1000/(1.732*12470),fz=(A.energized?A:B.energized?B:null);
+  let extra='';const z=m.zones[s.b];
+  if(s.tier==='home')extra=`<dt>Home</dt><dd>${z.kind==='bat'?'Battery '+(z.failed?'(failed)':Math.round(z.soc*100)+'%'):z.kind==='pv'?'Solar only':'No battery or solar'}</dd>`;
+  if(s.tier==='home'&&m.night&&B.energized&&!B.src)extra+=`<dt>Cap now</dt><dd>${E.homeKW(m,B).toFixed(1)} kW (wants ${(m.heat?2.2:1.2).toFixed(1)} kW)</dd>`;
+  const st=s.closed?'<span class="pill ok">Closed</span>':'<span class="pill warn">Open</span>';
+  $('insp').innerHTML=`<h3>${TN[s.tier]} ${s.tier==='home'?E.label(s.b):s.id}</h3>
+  <div>${st} ${s.lock?'<span class="pill warn">Padlocked</span>':''} ${s.flock?'<span class="pill bad">Fault lockout</span>':''}</div>
+  <dl><dt>Grid side</dt><dd>${volts(s.a,I)} · ${A.energized?A.f.toFixed(2)+' Hz':'dead'}</dd>
+  <dt>Load side</dt><dd>${volts(s.b,I)} · ${B.energized?B.f.toFixed(2)+' Hz':'dead'}</dd>
+  <dt>Through switch</dt><dd>${kw.toFixed(1)} kW · ${amps.toFixed(amps<10?1:0)} A</dd>
+  <dt>Powered from</dt><dd>${fz?fz.src?'Grid ('+fz.src.slice(5)+')':'Island led by '+E.label(fz.leader):'nothing'}</dd>${extra}
+  <dt>Last moved</dt><dd>${s.last<0?'never':(m.t-s.last)+(m.night?' min ago':' s ago')}</dd></dl>
+  <div class="ctrls"><button type="button" id="a-lock">${s.lock?'Remove padlock':'Padlock open'}</button>
+  <button type="button" id="a-open">Open by hand</button><button type="button" id="a-close">Request close</button></div>
+  <p class="note">Request close runs the same permit the central computer uses.</p>`;
+  $('a-lock').onclick=()=>{E.lockSw(m,sel,!s.lock);draw();};
+  $('a-open').onclick=()=>{E.manualOpen(m,sel);draw();};
+  $('a-close').onclick=()=>{E.manualClose(m,sel);draw();};}
+const TL={local:'node',xfmr:'xfmr',regional:'region',central:'central',crew:'crew',cyber:'cyber',fault:'fault'};
+function logs(){$('log').innerHTML=m.log.slice(-40).reverse().map(l=>`<div><time>t+${l.t}${m.night?'m':'s'}</time><em class="t-${l.tier}">${TL[l.tier]}</em><span>${l.msg}</span></div>`).join('');}
+function scen(){$('scen').innerHTML=Object.entries(E.SCEN).map(([k,s])=>`<button type="button" data-k="${k}" class="${k===active?'on':''}">${s.name}<small>${s.sub}</small></button>`).join('');}
+$('scen').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;active=b.dataset.k;m=E.start(m,active);
+  if(m.sw[sel]===undefined)sel=null;scen();setPlay(true);draw();});
+$('grid').addEventListener('click',e=>{const g=e.target.closest('[data-sw]');if(!g)return;sel=g.dataset.sw;draw();});
+function loop(){clearInterval(timer);if(playing)timer=setInterval(()=>{E.tick(m);draw();},1000/speeds[si]);}
+function setPlay(p){playing=p;$('b-play').textContent=p?'Pause':'Play';$('b-play').classList.toggle('on',p);loop();}
+$('b-play').onclick=()=>setPlay(!playing);
+$('b-step').onclick=()=>{setPlay(false);E.tick(m);draw();};
+$('b-speed').onclick=()=>{si=(si+1)%speeds.length;$('b-speed').textContent='Speed '+speeds[si]+'×';loop();};
+$('b-hour').onclick=()=>{if(m.night||(m.script&&m.script.key==='night')){for(let i=0;i<60;i++)E.tick(m);}else E.skipHour(m);draw();};
+$('nightplan').onchange=e=>{m.plan=e.target.value;m.log.push({t:m.t,tier:'regional',msg:'Night plan set to: '+e.target.options[e.target.selectedIndex].text});draw();};
+$('antiflap').onchange=e=>{m.antiFlap=e.target.checked;m.log.push({t:m.t,tier:'regional',msg:'Anti-flap rules '+(m.antiFlap?'on':'off')});draw();};
+function permit(){const v=id=>$(id),lock=v('p-lock').checked,fault=v('p-fault').checked,sig=v('p-sig').checked,
+  hold=+v('p-hold').value,dv=+v('p-dv').value,df=+v('p-df').value,dp=+v('p-dp').value,cap=+v('p-cap').value;
+  $('o-hold').textContent=hold;$('o-dv').textContent=dv.toFixed(1)+' %';$('o-df').textContent=df.toFixed(2)+' Hz';$('o-dp').textContent=dp+'°';$('o-cap').textContent=cap+' %';
+  const ch=[[!lock,'No padlock on the handle','Padlock blocks the close mechanically'],[!fault,'Test pulse clear','Test pulse found a fault; switch locks out'],
+    [sig,'Command signature valid','Unsigned or forged command ignored'],[hold>=E.HOLD,'Held 15 s since last move','Hold time not met ('+(E.HOLD-hold)+' s left)'],
+    [dv<=10,'Voltage difference ≤ 10 %','Voltage difference over 10 %'],[df<=0.3,'Frequency difference ≤ 0.3 Hz','Frequency difference over 0.3 Hz'],
+    [dp<=20,'Phase angle ≤ 20°','Phase angle over 20°'],[cap>=115,'Capacity ≥ 115 % of load','Island would be short on power']];
+  const bad=ch.find(c=>!c[0]);
+  $('verdict').className='verdict '+(bad?'no':'go');
+  $('verdict').innerHTML=bad?'Close blocked<small>'+bad[2]+'. Opening is still allowed at any time.</small>':'Close permitted<small>All eight checks pass. The contactor closes within 3 cycles.</small>';
+  $('checks').innerHTML=ch.map(c=>`<li><span class="${c[0]?'ok':'bad'}">${c[0]?'✓':'✗'}</span><span>${c[0]?c[1]:c[2]}</span></li>`).join('');}
+document.querySelectorAll('.permit input').forEach(i=>i.addEventListener('input',permit));
+scen();permit();draw();setPlay(playing);
+})();
+</script>
+</body>
+</html>
